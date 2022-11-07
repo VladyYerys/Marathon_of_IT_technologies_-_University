@@ -1,4 +1,4 @@
-# Marathon_of_IT_technologies_-_University
+# Marathon_of_IT_technologies_EPAM_University
 
 - Розробку власного проєкту з нуля з експертами ЕРАМ
 - Особливості розробки вимог в Scrum
