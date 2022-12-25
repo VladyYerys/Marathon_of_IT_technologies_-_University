@@ -1,0 +1,4 @@
+com\epam\ticTacToeTests\LeaderBoardTest.class
+com\epam\BaseTest.class
+com\epam\ticTacToeTests\SignInTest.class
+com\epam\listener\AllureListener.class

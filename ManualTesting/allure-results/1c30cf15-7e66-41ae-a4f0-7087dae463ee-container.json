@@ -1,0 +1,1 @@
+{"uuid":"1c30cf15-7e66-41ae-a4f0-7087dae463ee","name":"com.epam.BaseTest.teardown","children":["baa6a374-69b6-43f9-a344-409241e3ff0a"],"description":"","befores":[],"afters":[{"name":"teardown","status":"passed","stage":"finished","description":"","steps":[],"attachments":[],"parameters":[],"start":1668385697881,"stop":1668385698092}],"start":1668385697880,"stop":1668385698092}

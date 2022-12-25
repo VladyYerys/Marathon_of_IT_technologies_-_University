@@ -1,0 +1,603 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Application stack'
+
+Parameters:
+  ResourcePrefix:
+    Description: 'Prefix for resources'
+    Type: String
+    Default: 'marathon'
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: 'S3 bucket with lambda code'
+    Default: 'marathon-2022'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC for services'
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'List of subnets used for lambdas and ElastiCache cluster'
+  ApiGatewayStageName:
+    Type: String
+    Default: 'Dev'
+  LambdaTimeout:
+    Type: Number
+    Description: 'Timeout in seconds for Lambda execution'
+    Default: 30
+
+Resources:
+  apiGatewayWebSocket:
+    Type: 'AWS::ApiGatewayV2::Api'
+    Properties:
+      Name: !Sub '${ResourcePrefix}-api-gw-web'
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+      ApiKeySelectionExpression: $request.header.x-api-key
+  apiGatewayWebSocketRouteConnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      RouteKey: '$connect'
+      Target: !Sub 'integrations/${apiGatewayWebSocketRouteIntegrationConnect}'
+  apiGatewayWebSocketRouteDisconnect:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      RouteKey: '$disconnect'
+      Target: !Sub 'integrations/${apiGatewayWebSocketRouteIntegrationDisconnect}'
+  apiGatewayWebSocketRouteInvite:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      RouteKey: 'invite'
+      Target: !Sub 'integrations/${apiGatewayWebSocketRouteIntegrationInvite}'
+  apiGatewayWebSocketRouteMove:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      RouteKey: 'move'
+      Target: !Sub 'integrations/${apiGatewayWebSocketRouteIntegrationMove}'
+  apiGatewayWebSocketRouteIntegrationConnect:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaBackEndConnect.Arn}/invocations'
+  apiGatewayWebSocketRouteIntegrationDisconnect:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      Description: Disconnect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaBackEndDisconnect.Arn}/invocations'
+  apiGatewayWebSocketRouteIntegrationInvite:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      Description: Lambda Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaBackEndInvite.Arn}/invocations'
+  apiGatewayWebSocketRouteIntegrationMove:
+    Type: 'AWS::ApiGatewayV2::Integration'
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      Description: Lambda Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaBackEndMove.Arn}/invocations'
+  apiGatewayWebSocketDeployment:
+    Type: 'AWS::ApiGatewayV2::Deployment'
+    DependsOn:
+      - apiGatewayWebSocketRouteConnect
+      - apiGatewayWebSocketRouteDisconnect
+      - apiGatewayWebSocketRouteInvite
+      - apiGatewayWebSocketRouteMove
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      StageName: !Ref apiGatewayWebSocketStage
+  apiGatewayWebSocketStage:
+    Type: 'AWS::ApiGatewayV2::Stage'
+    Properties:
+      ApiId: !Ref apiGatewayWebSocket
+      StageName: !Ref ApiGatewayStageName
+      AutoDeploy: true
+  LambdaBackEndConnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-BackEnd-connect'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOST: !Sub '${ElasticacheCluster.RedisEndpoint.Address}'
+          PORT: !Sub '${ElasticacheCluster.RedisEndpoint.Port}'
+      Runtime: 'java11'
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.ConnectionFirstFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionBackEndConnect:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGatewayWebSocket
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaBackEndConnect
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGatewayWebSocket}/*/$connect'
+  LambdaBackEndDisconnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-BackEnd-disconnect'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOST: !Sub '${ElasticacheCluster.RedisEndpoint.Address}'
+          PORT: !Sub '${ElasticacheCluster.RedisEndpoint.Port}'
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.ConnectionEndFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionBackEndDisconnect:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGatewayWebSocket
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaBackEndDisconnect
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGatewayWebSocket}/*/$disconnect'
+  LambdaBackEndInvite:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-BackEnd-invite'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOST: !Sub '${ElasticacheCluster.RedisEndpoint.Address}'
+          PORT: !Sub '${ElasticacheCluster.RedisEndpoint.Port}'
+          ENDPOINT: !Sub 'https://${apiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGatewayStageName}'
+          REGION: !Ref AWS::Region
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.InviteFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionBackEndInvite:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGatewayWebSocket
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaBackEndInvite
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGatewayWebSocket}/*/invite'
+  LambdaBackEndMove:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-BackEnd-move'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOST: !Sub '${ElasticacheCluster.RedisEndpoint.Address}'
+          PORT: !Sub '${ElasticacheCluster.RedisEndpoint.Port}'
+          ENDPOINT: !Sub 'https://${apiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGatewayStageName}'
+          REGION: !Ref AWS::Region
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.MoveFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionBackEndMove:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGatewayWebSocket
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaBackEndMove
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGatewayWebSocket}/*/move'
+  apiGateway:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: !Sub '${ResourcePrefix}-api-gw'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+  apiGatewayResourceUserService:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt apiGateway.RootResourceId
+      PathPart: '{proxy+}'
+  apiGatewayResourceAllConnect:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt apiGateway.RootResourceId
+      PathPart: 'allConnect'
+  apiGatewayResourceGetRank:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt apiGateway.RootResourceId
+      PathPart: 'getRank'
+  apiGatewayResourceGetRankId:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !Ref apiGatewayResourceGetRank
+      PathPart: '{id}'
+  apiGatewayResourceUpdateRank:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt apiGateway.RootResourceId
+      PathPart: 'updateRank'
+  apiGatewayMethodUserService:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        IntegrationHttpMethod: ANY
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserServiceLambda.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref apiGatewayResourceUserService
+      RestApiId: !Ref apiGateway
+  apiGatewayMethodGetAllConnect:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: ANY
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaAllConnect.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref apiGatewayResourceAllConnect
+      RestApiId: !Ref apiGateway
+  apiGatewayMethodGetGetRank:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: ANY
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaGetRank.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref apiGatewayResourceGetRankId
+      RestApiId: !Ref apiGateway
+  apiGatewayMethodPostUpdateRank:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        IntegrationHttpMethod: ANY
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaUpdateRank.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref apiGatewayResourceUpdateRank
+      RestApiId: !Ref apiGateway
+  apiGatewayMethodOptionsUserService:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+      ResourceId: !Ref apiGatewayResourceUserService
+      RestApiId: !Ref apiGateway
+  apiGatewayStageUserService:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: !Ref ApiGatewayStageName
+      RestApiId: !Ref apiGateway
+      DeploymentId: !Ref apiGatewayDeployment
+      MethodSettings:
+        - LoggingLevel: 'INFO'
+          ResourcePath: '/*'
+          HttpMethod: '*'
+          DataTraceEnabled: true
+  apiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - apiGatewayMethodUserService
+    Properties:
+      RestApiId: !Ref apiGateway
+  LambdaSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Lambdas Security Group'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+  UserServiceLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-UserService'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          BucketName: !Sub '${LambdaCodeS3Bucket}/images'
+          UserPoolClientId: !Ref CognitoUserPoolClient
+          UserPoolClientSecret: ''
+          UserPoolId: !Ref CognitoUserPool
+          Authority: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
+          CORS: !Sub 'http://${LambdaCodeS3Bucket}-static.s3-website-${AWS::Region}.amazonaws.com'
+          Region: !Sub '${AWS::Region}'
+      Runtime: 'dotnet6'
+      MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'SpaceGame.UserService.API::SpaceGame.UserService.API.LambdaEntryPoint::FunctionHandlerAsync'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/UserService.zip'
+  LambdaAllConnect:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-allConnect'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          HOST: !Sub '${ElasticacheCluster.RedisEndpoint.Address}'
+          PORT: !Sub '${ElasticacheCluster.RedisEndpoint.Port}'
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.GetAllConnectionFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionAllConnect:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGateway
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaAllConnect
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/GET/allConnect'
+  LambdaGetRank:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-getRank'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          TABLE: !Ref UserDynamoDBTable
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.GetRankFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionGetRank:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGateway
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaGetRank
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/GET/getRank'
+  LambdaUpdateRank:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ResourcePrefix}-updateRank'
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          TABLE: !Ref UserDynamoDBTable
+      Runtime: 'java11'
+      # MemorySize: 256
+      Timeout: !Ref LambdaTimeout
+      Handler: 'com.example.UpdateRankFunction::handleRequest'
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref SubnetIds
+      Code:
+        S3Bucket: !Sub '${LambdaCodeS3Bucket}'
+        S3Key: 'lambdas/java-back.zip'
+  LambdaPermissionUpdateRank:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGateway
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref LambdaUpdateRank
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/POST/updateRank'
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonElastiCacheFullAccess'
+        - 'arn:aws:iam::aws:policy/AWSLambdaExecute'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaRole'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+  LambdaPermissionUserServiceLambda:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - apiGateway
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !Ref UserServiceLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/*/*'
+  ElasticacheSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Elasticache Security Group'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: 0.0.0.0/0
+  ElasticacheSubnetGroup:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      CacheSubnetGroupName: !Sub '${ResourcePrefix}-subnetGroup'
+      Description: 'Sample subnet group for Elasticache'
+      SubnetIds: !Ref SubnetIds
+  ElasticacheCluster:
+    Type: 'AWS::ElastiCache::CacheCluster'
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      Engine: redis
+      CacheNodeType: cache.t2.micro
+      NumCacheNodes: '1'
+      VpcSecurityGroupIds:
+        - !GetAtt ElasticacheSecurityGroup.GroupId
+      CacheSubnetGroupName: !Ref ElasticacheSubnetGroup
+  UserDynamoDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: 'email'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'email'
+          KeyType: 'HASH'
+      ProvisionedThroughput:
+        ReadCapacityUnits: '5'
+        WriteCapacityUnits: '5'
+      TableName: 'Users'
+  CognitoUserPool:
+    Type: 'AWS::Cognito::UserPool'
+    Properties:
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 6
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 365
+      UserPoolName: cloudform1-userPool
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+  CognitoUserPoolClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      AccessTokenValidity: 10
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - aws.cognito.signin.user.admin
+        - profile
+      AuthSessionValidity: 10
+      ClientName: maraphoneDotNetClient
+      EnableTokenRevocation: true
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      GenerateSecret: true
+      CallbackURLs: ['https://localhost:44389/signin']
+      IdTokenValidity: 10
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: minutes
+      UserPoolId: !Ref CognitoUserPool
+
+Outputs:
+  apiGatewayInvokeURL:
+    Value: !Sub 'https://${apiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiGatewayStageName}'
+  ElasticacheAddress:
+    Value: !Sub '${ElasticacheCluster.RedisEndpoint.Address}:${ElasticacheCluster.RedisEndpoint.Port}'

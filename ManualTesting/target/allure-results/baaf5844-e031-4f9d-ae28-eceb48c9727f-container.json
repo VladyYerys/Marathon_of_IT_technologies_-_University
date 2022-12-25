@@ -1,0 +1,1 @@
+{"uuid":"baaf5844-e031-4f9d-ae28-eceb48c9727f","name":"com.epam.BaseTest.pageSetUp","children":["c4ef4053-bdb5-491d-bd64-530b794ce6e1"],"description":"","befores":[{"name":"pageSetUp","status":"passed","stage":"finished","description":"","steps":[],"attachments":[],"parameters":[],"start":1668390388939,"stop":1668390388940}],"afters":[],"start":1668390388939,"stop":1668390388940}

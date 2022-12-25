@@ -1,0 +1,9 @@
+com\epam\aqa\page\SignUpPage.class
+com\epam\aqa\page\MainGameRoomPage.class
+com\epam\aqa\manager\PageFactoryManager.class
+com\epam\aqa\page\GamePage.class
+com\epam\aqa\page\BasePage.class
+com\epam\aqa\page\DonatePage.class
+com\epam\aqa\page\SaveYourScorePopUp.class
+com\epam\aqa\page\LeaderBoardPage.class
+com\epam\aqa\page\SignInPage.class
